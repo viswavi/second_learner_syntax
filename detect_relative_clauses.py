@@ -1,3 +1,16 @@
+'''
+python detect_relative_clauses.py \
+    --corpus-type ets \
+    --data-index /projects/ogma2/users/vijayv/extra_storage/ETS_Corpus_of_Non-Native_Written_English/data/text/index.csv \
+    --data-dir /projects/ogma2/users/vijayv/extra_storage/ETS_Corpus_of_Non-Native_Written_English/data/text/responses/original/ \
+    --language-code en
+
+python detect_relative_clauses.py \
+    --corpus-type cedel2 \
+    --data-dir /projects/ogma2/users/vijayv/extra_storage/cedel2 \
+    --language-code es
+'''
+
 import argparse
 import csv
 import os
@@ -6,28 +19,39 @@ import stanza
 from tqdm import tqdm
 
 parser = argparse.ArgumentParser()
+parser.add_argument('--corpus-type', type=str,
+                    choices=["ets", "cedel2"],
+                    help='Path to corpus index')
+parser.add_argument('--data-index', type=str,
+                    default=None,
+                    help='Path to corpus index')
 parser.add_argument('--data-dir', type=str,
                     default="/projects/ogma2/users/vijayv/extra_storage/ETS_Corpus_of_Non-Native_Written_English/data/text/responses/original/",
                     help='Path to corpus directory of learner English.')
-parser.add_argument('--data-index', type=str,
-                    default="/projects/ogma2/users/vijayv/extra_storage/ETS_Corpus_of_Non-Native_Written_English/data/text/index.csv",
-                    help='Path to corpus index')
 parser.add_argument('--language-code', type=str, default="en",
                     help='Language code for loading Stanza models')
 
-PARSES_CACHE = "/projects/ogma2/users/vijayv/extra_storage/second_learner_syntax/ETS_Corpus_of_Non-Native_Written_English/parses_cache/"
+PARSES_CACHE = "/projects/ogma2/users/vijayv/extra_storage/ETS_Corpus_of_Non-Native_Written_English/parses_cache/"
 
-def load_data(data_index, data_dir, language_group, score_level):
+def load_data(corpus_type, data_index, data_dir, language_group, score_level):
     '''
     - Load text data in paragraphs.
     - Return list of paragraphs.
     '''
     matching_texts = []
-    with open(data_index) as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            if row["Language"] in language_group or row["Score Level"] == score_level:
-                text_file = os.path.join(data_dir, row["Filename"])
+    if corpus_type == "ets":
+        with open(data_index) as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                if row["Language"] in language_group or row["Score Level"] == score_level:
+                    text_file = os.path.join(data_dir, row["Filename"])
+                    matching_texts.append(open(text_file).read())
+    else:
+        assert corpus_type == "cedel2"
+        for file in os.path.listdir(data_dir):
+            language_code = file.split("_")[0]
+            if language_code in language_group:
+                text_file = os.path.join(data_dir, file)
                 matching_texts.append(open(text_file).read())
     return matching_texts
 
@@ -70,8 +94,13 @@ def detect_relative_clauses(parsed_paragraphs):
         for sentence in paragraph.to_dict():
             relative_pronoun = False
             for token in sentence:
-                if "PronType=Rel" in token["feats"].split():
-                    relative_pronoun = True
+                token_features = [feature.strip() for feature in token["feats"].split('|')]
+                pronoun_features = [feat for feat in token_features if feat.startswith("PronType=")]
+                assert len(pronoun_features) <= 1
+                if len(pronoun_features) == 1:
+                    pronoun_feature_values = pronoun_features[0][len("PronType="):].split(',')
+                    if "Rel" in pronoun_feature_values:
+                        relative_pronoun = True
             paragraph_relative_pronoun_labels.append(int(relative_pronoun))
         relative_pronoun_labels.append(paragraph_relative_pronoun_labels)
     return relative_pronoun_labels
@@ -88,19 +117,28 @@ def display_statistics(statistics):
 if __name__ == "__main__":
     args = parser.parse_args()
 
-    language_group_a = ["KOR", "JPN", "ZHO"]
-    language_group_b = ["DEU", "ARA", "FRA", "SPA", "HIN", "ITA"]
-    score_level = "medium"
-    # Unclear whether Telugu or Turkish have a frequently-used relative pronoun construction.
- 
-    data_group_a = load_data(args.data_index, args.data_dir, language_group_a, score_level)
-    data_group_b = load_data(args.data_index, args.data_dir, language_group_b, score_level)
+    if args.corpus_type == "ets":
+        language_group_a = ["KOR", "JPN", "ZHO"]
+        language_group_b = ["DEU", "ARA", "FRA", "SPA", "HIN", "ITA"]
+        score_level = "medium"
+        # Unclear whether Telugu or Turkish have a frequently-used relative pronoun construction.
+    else:
+        assert args.corpus_type == "cedel2"
+        language_group_a = ["jp", "cn"]
+        language_group_b = ["de", "en", "fr", "gr", "it", "nl", "pt", "ru"]
+        score_level = None
+
+    data_group_a = load_data(args.corpus_type, args.data_index, args.data_dir, language_group_a, score_level)
+    data_group_b = load_data(args.corpus_type, args.data_index, args.data_dir, language_group_b, score_level)
     model = load_model(args.language_code)
 
+    os.makedirs(PARSES_CACHE, exist_ok = True)
     cache_file_a = os.path.join(PARSES_CACHE, "dependencies_group_a.pkl")
     dependency_parses_a = parse_dependencies(model, data_group_a, cache_file_a)
     cache_file_b = os.path.join(PARSES_CACHE, "dependencies_group_b.pkl")
     dependency_parses_b = parse_dependencies(model, data_group_b, cache_file_b)
+
+    breakpoint()
 
     relative_clause_labels_a = detect_relative_clauses(dependency_parses_a)
     relative_clause_labels_b = detect_relative_clauses(dependency_parses_b)
