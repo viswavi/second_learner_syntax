@@ -3,9 +3,7 @@ python detect_relative_clauses.py \
     --corpus-type ets \
     --data-index /projects/ogma2/users/vijayv/extra_storage/ETS_Corpus_of_Non-Native_Written_English/data/text/index.csv \
     --data-dir /projects/ogma2/users/vijayv/extra_storage/ETS_Corpus_of_Non-Native_Written_English/data/text/responses/original/ \
-    --language-code en
-
-python detect_relative_clauses.py \
+    --language-code en; python detect_relative_clauses.py \
     --corpus-type cedel2 \
     --data-dir /projects/ogma2/users/vijayv/extra_storage/cedel2 \
     --language-code es
@@ -31,14 +29,13 @@ parser.add_argument('--data-dir', type=str,
 parser.add_argument('--language-code', type=str, default="en",
                     help='Language code for loading Stanza models')
 
-PARSES_CACHE = "/projects/ogma2/users/vijayv/extra_storage/ETS_Corpus_of_Non-Native_Written_English/parses_cache/"
-
 def load_data(corpus_type, data_index, data_dir, language_group, score_level):
     '''
     - Load text data in paragraphs.
     - Return list of paragraphs.
     '''
     matching_texts = []
+    language_codes = []
     if corpus_type == "ets":
         with open(data_index) as csvfile:
             reader = csv.DictReader(csvfile)
@@ -46,13 +43,15 @@ def load_data(corpus_type, data_index, data_dir, language_group, score_level):
                 if row["Language"] in language_group or row["Score Level"] == score_level:
                     text_file = os.path.join(data_dir, row["Filename"])
                     matching_texts.append(open(text_file).read())
+                    language_codes.append(row["Language"])
     else:
         assert corpus_type == "cedel2"
-        for file in os.path.listdir(data_dir):
+        for file in os.listdir(data_dir):
             language_code = file.split("_")[0]
             if language_code in language_group:
                 text_file = os.path.join(data_dir, file)
                 matching_texts.append(open(text_file).read())
+                language_codes.append(language_code)
     return matching_texts
 
 
@@ -60,6 +59,7 @@ def load_model(language_code):
     '''
     - Load Stanza model for dependency parsing in language code.
     '''
+    stanza.download(lang=language_code)
     nlp = stanza.Pipeline(lang=language_code, processors='tokenize,pos,lemma,depparse')
     return nlp
 
@@ -79,6 +79,7 @@ def parse_dependencies(model, paragraphs, cache_file):
         for p in tqdm(paragraphs):
             parse = model(p)
             parses.append(parse)
+        pickle.dump(parses, open(cache_file, 'wb'))
     return parses
 
 
@@ -94,6 +95,8 @@ def detect_relative_clauses(parsed_paragraphs):
         for sentence in paragraph.to_dict():
             relative_pronoun = False
             for token in sentence:
+                if "feats" not in token:
+                    continue
                 token_features = [feature.strip() for feature in token["feats"].split('|')]
                 pronoun_features = [feat for feat in token_features if feat.startswith("PronType=")]
                 assert len(pronoun_features) <= 1
@@ -121,12 +124,14 @@ if __name__ == "__main__":
         language_group_a = ["KOR", "JPN", "ZHO"]
         language_group_b = ["DEU", "ARA", "FRA", "SPA", "HIN", "ITA"]
         score_level = "medium"
+        PARSES_CACHE = "/projects/ogma2/users/vijayv/extra_storage/ETS_Corpus_of_Non-Native_Written_English/parses_cache/"
         # Unclear whether Telugu or Turkish have a frequently-used relative pronoun construction.
     else:
         assert args.corpus_type == "cedel2"
         language_group_a = ["jp", "cn"]
         language_group_b = ["de", "en", "fr", "gr", "it", "nl", "pt", "ru"]
         score_level = None
+        PARSES_CACHE = "/projects/ogma2/users/vijayv/extra_storage/cedel2/parses_cache/"
 
     data_group_a = load_data(args.corpus_type, args.data_index, args.data_dir, language_group_a, score_level)
     data_group_b = load_data(args.corpus_type, args.data_index, args.data_dir, language_group_b, score_level)
@@ -137,8 +142,6 @@ if __name__ == "__main__":
     dependency_parses_a = parse_dependencies(model, data_group_a, cache_file_a)
     cache_file_b = os.path.join(PARSES_CACHE, "dependencies_group_b.pkl")
     dependency_parses_b = parse_dependencies(model, data_group_b, cache_file_b)
-
-    breakpoint()
 
     relative_clause_labels_a = detect_relative_clauses(dependency_parses_a)
     relative_clause_labels_b = detect_relative_clauses(dependency_parses_b)
